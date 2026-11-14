@@ -131,9 +131,8 @@ class V850Link(object):
         t_end = time.time() + 120
         while self.alive and time.time() < t_end:
             try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.connect(self.uart_sock)
-                return s
+                from . import plat
+                return plat.try_connect(self.uart_sock)
             except Exception:
                 time.sleep(0.5)
         return None

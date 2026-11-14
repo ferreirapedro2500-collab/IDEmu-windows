@@ -29,6 +29,9 @@ system: the firmware packages do not carry map data and the navigation engine do
 * Renderer helpers (`glhost`, `glhost7`, `mguhost`) are built from [src](src) with clang. iDrive 8 also needs ANGLE (`libEGL.dylib` and `libGLESv2.dylib`),
   found in any installed Chromium-based app, or set `IDEMU_ANGLE`.
 
+**Windows**: iDrive 5/6 has a Windows port (Python server, web UI, Electron, renderer and QEMU board). Build steps, requirements and
+limits: [docs/WINDOWS.md](docs/WINDOWS.md).
+
 ## Quick start
 
 ```bash

@@ -1,0 +1,101 @@
+# Gera o instalador do IDEmu para Windows (IDEmu-Setup-<versão>.exe).
+# * a cada tag v* (ex.: git tag v0.2.0 && git push --tags): compila, empacota e publica na página Releases;
+# * manualmente (aba Actions > "Windows installer" > Run workflow): só gera o .exe como artefato para baixar.
+# O instalador leva glhost.exe, qemu-system-arm.exe (+ DLLs), um Python embutido e o projeto. Nada da BMW.
+name: Windows installer
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write          # anexar o .exe à release
+
+env:
+  QEMU_VERSION: '11.1.2'
+  PYTHON_VERSION: '3.12.10'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git python ninja patch
+            mingw-w64-x86_64-toolchain mingw-w64-x86_64-glib2 mingw-w64-x86_64-pixman
+            mingw-w64-x86_64-meson mingw-w64-x86_64-pkgconf mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-setuptools mingw-w64-x86_64-freeglut mingw-w64-x86_64-glew
+
+      - name: Cache do código do QEMU
+        uses: actions/cache@v4
+        with:
+          path: cache/qemu-${{ env.QEMU_VERSION }}.tar.xz
+          key: qemu-src-${{ env.QEMU_VERSION }}
+
+      - name: Baixar o QEMU
+        run: |
+          mkdir -p cache
+          [ -f cache/qemu-$QEMU_VERSION.tar.xz ] || curl -L --fail -o cache/qemu-$QEMU_VERSION.tar.xz https://download.qemu.org/qemu-$QEMU_VERSION.tar.xz
+
+      - name: Compilar glhost.exe
+        run: bash src/glhost/build_windows.sh
+
+      - name: Compilar qemu-system-arm.exe (placa omap5-uevm)
+        run: QEMU_BUILD_DIR=$RUNNER_TEMP/qemu-build bash tools/qemu/build_windows_arm.sh cache/qemu-$QEMU_VERSION.tar.xz
+
+      - name: Testes do Python
+        shell: pwsh
+        run: python -m unittest tests.test_bugfixes tests.test_coding tests.test_canbus
+
+      - name: Preparar a pasta do instalador (projeto + bin + Python embutido)
+        shell: pwsh
+        run: |
+          $dist = "dist\IDEmu"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          $skip = @('.git', '.github', 'dist', 'cache', 'environments', 'node_modules')
+          Get-ChildItem -Force | Where-Object { $skip -notcontains $_.Name } | Copy-Item -Destination $dist -Recurse -Force
+          # Python embutido: python\python.exe; o ._pth inclui a pasta do programa (..) para "python -m idemu" achar o pacote
+          $zip = "python-$env:PYTHON_VERSION-embed-amd64.zip"
+          Invoke-WebRequest "https://www.python.org/ftp/python/$env:PYTHON_VERSION/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$dist\python" -Force
+          $pth = Get-ChildItem "$dist\python\python*._pth" | Select-Object -First 1
+          $tag = $pth.BaseName
+          Set-Content $pth.FullName -Encoding ascii -Value @("$tag.zip", '.', '..', 'import site')
+          Copy-Item tools\windows\installer\TERCEIROS.txt $dist\
+          if (Test-Path "$dist\bin\ucrtbase.dll") { Remove-Item "$dist\bin\ucrtbase.dll" }
+          & "$dist\python\python.exe" -c "import sys; sys.path.insert(0, r'$dist'); import idemu.server; print('import ok')"
+          if ($LASTEXITCODE -ne 0) { throw 'o pacote idemu não importa com o Python embutido' }
+
+      - name: Gerar o instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { "0.0.0-dev.$env:GITHUB_RUN_NUMBER" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$ver" "/DSrc=$PWD\dist\IDEmu" "/Odist" tools\windows\installer\idemu.iss
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC falhou' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IDEmu-Setup
+          path: dist/IDEmu-Setup-*.exe
+
+      - name: Publicar na release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/IDEmu-Setup-*.exe
+          body: |
+            Instalador do IDEmu para Windows (iDrive 5/6).
+            Não inclui nenhum arquivo da BMW: você precisa da sua PSdZData (veja docs/WINDOWS.md).
+            QEMU (GPL-2.0-or-later): o código-fonte deste binário é o QEMU ${{ env.QEMU_VERSION }} oficial + src/qemu desta tag.

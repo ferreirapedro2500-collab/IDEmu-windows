@@ -137,7 +137,7 @@ window.IDE = window.IDE || {};
     }
     return 0;
   };
-  IDE.baseName = (p) => String(p || '').split('/').filter(Boolean).pop() || '';
+  IDE.baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || '';
 
   /* ------------------------------------------------------------------ preferências de UI */
   IDE.pref = {

@@ -5,13 +5,14 @@ CPU, RAM residente, quadros por segundo e tempo de quadro, GPU do Mac e o espaç
 Só usa `ps`, `ioreg`, `sysctl` e o cabeçalho do quadro compartilhado: nada é injetado na VM.
 """
 import os, re, time, shutil, threading, subprocess, collections
+from . import plat
 
 INTERVAL = 1.0
 HISTORY = 900            # 15 minutos a 1 amostra/s
 STORAGE_EVERY = 15.0
 
 def _run(cmd, timeout=3):
-    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **plat.no_window_kwargs()).stdout
     except Exception: return ''
 
 def _cputime(s):
@@ -27,6 +28,12 @@ def ps_info(pids):
     """{pid: (cpu_seconds, rss_kb, vsz_kb)} num único `ps`."""
     pids = [p for p in pids if p]
     if not pids: return {}
+    if plat.WINDOWS:
+        res = {}
+        for p in pids:
+            i = plat.proc_info(p)
+            if i: res[p] = i
+        return res
     out = _run(['ps', '-o', 'pid=,time=,rss=,vsz=', '-p', ','.join(str(p) for p in pids)])
     res = {}
     for line in out.splitlines():
@@ -38,6 +45,7 @@ def ps_info(pids):
 
 def gpu_info():
     """Uso da GPU do sistema (não por processo: o macOS não expõe isso sem privilégios)."""
+    if not plat.MACOS: return {}
     out = _run(['ioreg', '-r', '-d', '1', '-w0', '-c', 'IOAccelerator'])
     d = {}
     for k, key in (('Device Utilization %', 'dev'), ('Renderer Utilization %', 'render'), ('Tiler Utilization %', 'tiler'),
@@ -47,6 +55,10 @@ def gpu_info():
     return d
 
 def gpu_name():
+    if plat.WINDOWS:
+        out = _run(['powershell', '-NoProfile', '-Command', '(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name'], timeout=10)
+        return out.strip() or None
+    if not plat.MACOS: return None
     out = _run(['ioreg', '-r', '-d', '1', '-w0', '-c', 'IOAccelerator'])
     m = re.search(r'"model" = "([^"]+)"', out)
     return m.group(1) if m else None
@@ -73,7 +85,7 @@ class Sampler:
         self.frames = collections.deque(maxlen=2000)         # instantes (s) em que o renderizador entregou um quadro
         self.lock = threading.Lock()
         self.run_key = None; self.last = None
-        self.static = {'host_ram_mb': self._sysctl('hw.memsize') // (1 << 20), 'cores': os.cpu_count() or 1, 'gpu': None, 'guest_ram_mb': 2048}
+        self.static = {'host_ram_mb': plat.total_ram_bytes() // (1 << 20), 'cores': os.cpu_count() or 1, 'gpu': None, 'guest_ram_mb': 2048}
         self.storage = {}; self.storage_t = {}
         self._stop = threading.Event(); self.seen = 0.0          # última consulta de /api/stats: sem ninguém olhando, a amostragem para
         threading.Thread(target=self._fast, daemon=True).start()
@@ -154,6 +166,7 @@ class Sampler:
 
     @staticmethod
     def _guest_ram(pid):
+        if plat.WINDOWS: return 2048
         m = re.search(r'\s-m\s+(\d+)', _run(['ps', '-o', 'command=', '-p', str(pid)]))
         return int(m.group(1)) if m else 2048
 
@@ -175,7 +188,7 @@ class Sampler:
             p = os.path.join(d, n)
             other += dir_size(p) if os.path.isdir(p) else os.path.getsize(p)
         if other: parts.append({'id': 'other', 'label': 'Outros', 'bytes': other}); total += other
-        run = os.path.join('/tmp/idemu-%d' % os.getuid(), eid)
+        run = os.path.join(plat.run_root(), eid)
         rb = dir_size(run) if os.path.isdir(run) else 0
         if rb: parts.append({'id': 'run', 'label': 'Temporários da execução', 'bytes': rb}); total += rb
         du = shutil.disk_usage(d)

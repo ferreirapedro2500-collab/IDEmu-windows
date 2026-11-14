@@ -2,7 +2,7 @@
 import os, re, subprocess, json, time, shutil, threading, traceback, mimetypes, datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from . import catalog, builder, runtime, codegen, coding, coding7, coding8, stats, mgu, mgu7, phone, cluster, cic, vin, sysfiles
+from . import plat, catalog, builder, runtime, codegen, coding, coding7, coding8, stats, mgu, mgu7, phone, cluster, cic, vin, sysfiles
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENVS = os.path.join(ROOT, 'environments')
@@ -86,7 +86,7 @@ class App:
         if os.path.lexists(self.env_dir(eid)): raise ApiError('já existe um ambiente com esse id')
         if os.path.exists(target) and os.listdir(target): raise ApiError('já existe uma pasta "%s" com arquivos dentro da pasta escolhida' % eid)
         os.makedirs(target, exist_ok=True)
-        os.symlink(target, self.env_dir(eid))
+        plat.link_dir(target, self.env_dir(eid))
         return real
     def _free_id(self, base, home=None):
         eid = base; i = 2
@@ -223,8 +223,8 @@ class App:
         if self.rt and self.rt.id == eid: self.rt.stop(); self.rt = None
         self.builds.pop(eid, None); self.flashes.pop(eid, None); sysfiles.forget(eid)
         d = self.env_dir(eid)
-        if os.path.islink(d):                          # VM numa pasta escolhida: apaga só a subpasta <home>/<id> que o IDEmu criou e depois o link
-            real = os.path.realpath(d); os.unlink(d)
+        if plat.is_link(d):                            # VM numa pasta escolhida: apaga só a subpasta <home>/<id> que o IDEmu criou e depois o link (junção no Windows)
+            real = os.path.realpath(d); plat.remove_link(d)
             if os.path.basename(real) == eid and os.path.isfile(os.path.join(real, 'env.json')): shutil.rmtree(real, ignore_errors=True)
             return
         shutil.rmtree(d, ignore_errors=True)
@@ -458,6 +458,12 @@ def get_stats():
 def native_pick(kind, prompt='', start=None):
     """Seletor nativo do macOS (osascript). Devolve o caminho escolhido, ou None se o usuário cancelar. Levanta ApiError se não houver como abrir o diálogo."""
     import subprocess
+    if not plat.MACOS:                                 # Windows/Linux: diálogo do tkinter (num processo à parte)
+        try:
+            v = plat.pick_dialog(kind, prompt, start)
+        except RuntimeError as e: raise ApiError('seletor nativo indisponível: %s' % e, 501)
+        if kind == 'files': return '\n'.join(v) if v else None
+        return v
     q = lambda x: '"' + str(x).replace('\\', '\\\\').replace('"', '\\"') + '"'
     loc = ''
     if start and os.path.isdir(os.path.expanduser(start)): loc = ' default location (POSIX file %s)' % q(os.path.expanduser(start))
@@ -486,7 +492,7 @@ def fs_list(path):
             except OSError: continue
             ents.append({'name': n, 'dir': d, 'size': sz})
     except PermissionError: raise ApiError('sem permissão', 403)
-    return {'path': path, 'parent': os.path.dirname(path) if path != '/' else None, 'entries': ents}
+    return {'path': path, 'parent': os.path.dirname(path) if os.path.dirname(path) != path else None, 'entries': ents}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
@@ -629,8 +635,8 @@ class H(BaseHTTPRequestHandler):
                 if len(P) > 3 and P[3] == 'reveal':
                     if m != 'POST': raise ApiError('use POST', 405)
                     os.makedirs(dd, exist_ok=True)
-                    r = subprocess.run(['open', dd], capture_output=True, text=True)
-                    if r.returncode: raise ApiError('não consegui abrir a pasta: %s' % r.stderr.strip()[:160], 500)
+                    ok, err = plat.open_path(dd)
+                    if not ok: raise ApiError('não consegui abrir a pasta: %s' % err[:160], 500)
                     return {'ok': True}
                 fl = cic.userfiles_list(A.env_dir(eid))
                 return {'dir': dd, 'mount': '/mnt/EFS_RO', 'files': fl, 'bytes': sum(f['size'] for f in fl)}
@@ -790,7 +796,7 @@ class H(BaseHTTPRequestHandler):
             g.load_route(d.get('name') or 'rota', gpx=d.get('gpx'), points=d.get('points'), speed_kmh=float(d.get('speed_kmh', 50)), loop=bool(d.get('loop', True))); return {'ok': True}
         raise ApiError('rota desconhecida', 404)
 
-def serve(host='127.0.0.1', port=8765, open_browser=True):
+def serve(host='127.0.0.1', port=8765, open_browser=True, exit_on_stdin_eof=False):
     srv = ThreadingHTTPServer((host, port), H)
     srv.daemon_threads = True
     url = 'http://%s:%d/' % (host, port)
@@ -801,8 +807,9 @@ def serve(host='127.0.0.1', port=8765, open_browser=True):
         if getattr(APP, '_phone', None): APP._phone.stop()
         if APP.rt: APP.rt.stop()
         os._exit(0)
-    for sg in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sg, _bye)
+    for sg in (getattr(signal, 'SIGTERM', None), getattr(signal, 'SIGHUP', None), getattr(signal, 'SIGBREAK', None)):
+        if sg is not None: signal.signal(sg, _bye)
+    if exit_on_stdin_eof: plat.watch_stdin_eof(_bye)    # Electron no Windows: fechar o stdin = encerrar com limpeza
     if open_browser:
         threading.Timer(0.6, lambda: _open(url)).start()
     try: srv.serve_forever()
@@ -811,8 +818,4 @@ def serve(host='127.0.0.1', port=8765, open_browser=True):
         if APP.rt: APP.rt.stop()
 
 def _open(url):
-    import subprocess
-    for app in ('Google Chrome', 'Chromium', 'Microsoft Edge', 'Brave Browser'):
-        if os.path.isdir('/Applications/%s.app' % app):
-            subprocess.Popen(['open', '-na', app, '--args', '--app=' + url, '--window-size=1400,900']); return
-    subprocess.Popen(['open', url])
+    plat.open_url(url)

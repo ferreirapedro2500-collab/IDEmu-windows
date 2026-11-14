@@ -1,0 +1,15 @@
+Componentes de terceiros distribuídos com o IDEmu para Windows
+================================================================
+
+QEMU 11.1.2 (bin\qemu-system-arm.exe) - GPL-2.0-or-later
+  Fonte oficial: https://download.qemu.org/qemu-11.1.2.tar.xz
+  Modificações do IDEmu (placa omap5-uevm e Kconfig/meson): src\qemu\ neste pacote (omap5-uevm.c, qemu-v11.1.2-idemu.patch)
+  Receita de compilação: tools\qemu\build_windows_arm.sh
+  O código-fonte correspondente a este binário está disponível na mesma versão (tag) do repositório no GitHub.
+
+GLib, libintl, libiconv, PCRE2, zlib, winpthreads (DLLs em bin\) - LGPL / licenças livres, pacotes MSYS2 (https://packages.msys2.org)
+freeglut (bin\libfreeglut.dll) - MIT/X
+GLEW (bin\glew32.dll) - Modified BSD / MIT
+Python (python\) - PSF License, distribuição "embeddable" oficial de https://www.python.org
+
+O IDEmu em si: PolyForm Noncommercial License 1.0.0 (LICENSE); arquivos de src\qemu continuam GPL-2.0-or-later (NOTICE).

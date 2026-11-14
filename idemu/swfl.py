@@ -7,7 +7,7 @@ Formato (descoberto por engenharia reversa): 10 bytes de cabeçalho, depois regi
 Arquivos grandes vêm em blocos de 20 MB: o primeiro registro cria o arquivo, os seguintes
 (Append=On) acrescentam. Vários blocos de dados podem seguir um mesmo registro de metadados.
 """
-import os, re
+import os, re, posixpath
 
 class SwflError(Exception):
     pass
@@ -27,7 +27,8 @@ def parse_name(path):
     return m.groups() if m else None
 
 def norm_target(meta):
-    tp = os.path.normpath('/' + meta.get('TargetPath', '/').lstrip('/')).lstrip('/')
+    # chemin QNX : toujours avec '/', même sous Windows (os.path.normpath y mettrait des '\\')
+    tp = posixpath.normpath('/' + meta.get('TargetPath', '/').replace('\\', '/').lstrip('/')).lstrip('/')
     return tp
 
 def summarize(path):
@@ -41,11 +42,21 @@ def summarize(path):
         roots[r] = roots.get(r, 0) + 1
     return {'files': len(files), 'bytes': nbytes, 'cpus': sorted(cpus), 'roots': roots}
 
+_WIN_RESERVED = {'con', 'prn', 'aux', 'nul'} | {'com%d' % i for i in range(1, 10)} | {'lpt%d' % i for i in range(1, 10)}
+
+def _bad_win_name(name):
+    """Nome que o Windows não aceita (caracteres proibidos, nome reservado, ponto/espaço no fim)."""
+    return (any(c in name for c in '<>:"|?*\\') or any(ord(c) < 32 for c in name) or name.rstrip(' .') != name
+            or name.split('.')[0].lower() in _WIN_RESERVED)
+
+
 def extract(path, out, select, progress=None):
     """Extrai blocos para out/<TargetPath>/<Name>.
     select(target_path, name, meta) -> bool.  Retorna lista de (relpath, tamanho)."""
     written = {}
     last_rec = {}
+    lower = {}                       # Windows: NTFS não diferencia maiúsculas; dois nomes que só diferem nisso se sobrescreveriam
+    extract.skipped = []
     size = float(os.path.getsize(path))
     with open(path, 'rb') as f:
         for meta, txt, off, ln, idx in records_fh(f, path):
@@ -54,6 +65,10 @@ def extract(path, out, select, progress=None):
             if not select(tp, name, meta):
                 continue
             dest = os.path.join(out, tp, name)
+            if os.name == 'nt':
+                k = dest.lower()
+                if lower.setdefault(k, dest) != dest or _bad_win_name(name):
+                    extract.skipped.append(tp + name); continue
             if 'Append=On' in txt and dest in written:
                 mode = 'ab'
             elif last_rec.get(dest) == idx:

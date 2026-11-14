@@ -85,6 +85,11 @@ def build(env, env_dir, log=print, progress=lambda pct, step: None):
             _last[0] = (pct, step); _p(pct, step)
     t0 = time.time()
     img_dir = os.path.join(env_dir, 'images'); work = os.path.join(env_dir, 'work')
+    if os.name == 'nt':
+        from . import plat
+        if not plat.long_paths_enabled():
+            log('AVISO (Windows): caminhos longos desativados (LongPathsEnabled=0). Os caminhos do QNX podem passar de 260 caracteres; '
+                'ative com tools\\windows\\enable-long-paths.ps1 (administrador) ou use uma pasta de ambientes curta, como C:\\idemu.')
     shutil.rmtree(work, ignore_errors=True); os.makedirs(work); os.makedirs(img_dir, exist_ok=True)
     sw = env['swfl']
     for role in ('os', 'brand', 'hmi'):
@@ -102,6 +107,9 @@ def build(env, env_dir, log=print, progress=lambda pct, step: None):
         trees[role] = out
         manifest['swfl'][role] = {'file': os.path.basename(sw[role]), 'sha256': sha256_file(sw[role], 1 << 26), 'files': len(files)}
         log('  %d arquivos' % len(files))
+        if getattr(swfl.extract, 'skipped', None):
+            log('AVISO (Windows): %d arquivo(s) com nome que o NTFS não aceita ou que só difere de outro por maiúsculas foram omitidos: %s'
+                % (len(swfl.extract.skipped), ', '.join(swfl.extract.skipped[:5])))
     istep = {r: os.path.join(trees[r], ISTEP) for r in trees}
     # 2) boot.ifs
     progress(22, 'Montando imagem de boot (IFS)')

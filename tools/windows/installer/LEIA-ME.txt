@@ -1,0 +1,12 @@
+IDEmu para Windows - emulador de head units BMW iDrive 5/6 (NBT Evo)
+
+* Ferramenta de pesquisa e aprendizado, sem fins comerciais (licença PolyForm Noncommercial 1.0.0).
+  Não é afiliada nem endossada pela BMW AG.
+* NENHUM software da BMW vem neste instalador. Você precisa da SUA própria PSdZData com os pacotes do NBT Evo
+  (swfl_0000271a, swfl_00002720, swfl_00002719).
+* O primeiro boot de um ambiente leva alguns minutos num PC modesto (o QEMU emula o processador ARM); os seguintes são rápidos.
+* O instalador ativa os caminhos longos do Windows (LongPathsEnabled) e instala em C:\IDEmu.
+* Componentes de terceiros: QEMU 11.1.2 (GPL-2.0-or-later, com a placa omap5-uevm do IDEmu),
+  freeglut (MIT), GLEW (BSD/MIT), GLib (LGPL), Python (PSF). Fontes e licenças: TERCEIROS.txt.
+
+Fork Windows do projeto original: https://github.com/herrbimmer/IDEmu

@@ -45,7 +45,8 @@ def make_cert(ips):
            '[v3]\nsubjectAltName=%s\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' % san)
     with tempfile.NamedTemporaryFile('w', suffix='.cnf', delete=False) as f: f.write(cfg); cp = f.name
     try:
-        r = subprocess.run(['/usr/bin/openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '365', '-keyout', key, '-out', crt, '-config', cp],
+        from . import plat
+        r = subprocess.run([plat.openssl(), 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '365', '-keyout', key, '-out', crt, '-config', cp],
                            capture_output=True, text=True, timeout=60)
     finally:
         os.unlink(cp)

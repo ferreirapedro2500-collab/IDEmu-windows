@@ -8,7 +8,7 @@
   IDE.pickPath = function (o) {
     if (window.idemuNative) {      // janela do Electron: diálogo nativo do sistema
       const dir = (o.mode || 'file') === 'dir';
-      return window.idemuNative.pick(dir ? 'folder' : 'file', o.title || '', o.start).then((r) => (r && r.path ? { path: r.path, name: r.path.split('/').pop(), size: 0 } : null));
+      return window.idemuNative.pick(dir ? 'folder' : 'file', o.title || '', o.start).then((r) => (r && r.path ? { path: r.path, name: r.path.split(/[\\/]/).pop(), size: 0 } : null));
     }
     return new Promise((resolve) => {
       const mode = o.mode || 'file';
@@ -512,7 +512,7 @@
       const start = sel && sel.path ? sel.path.replace(/\/[^/]*$/, '') || '/' : ((W.scan && W.scan.path) || IDE.state.settings.psdz_path || undefined);
       const n = await pickNative('file', IDE.t('Escolha o arquivo swfl_{id}.bin.…', { id: r.id }), start);
       let res = null;
-      if (n.native) { if (n.path) res = { path: n.path, name: n.path.split('/').pop(), size: 0 }; }
+      if (n.native) { if (n.path) res = { path: n.path, name: n.path.split(/[\\/]/).pop(), size: 0 }; }
       else res = await IDE.pickPath({ mode: 'file', start, title: IDE.t('Escolher arquivo – {label}', { label: IDE.t(r.label) }), hint: 'swfl_' + r.id + '.bin.*' });
       if (!res) return;
       W.swfl[r.role] = { key: roleKey(r), path: res.path, file: res.name, size: res.size, version: (res.name.match(/\.bin\.(.+)$/) || [])[1] || '', custom: true };

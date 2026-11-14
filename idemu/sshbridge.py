@@ -291,3 +291,122 @@ class SshBridge(object):
             "client_config": self.client_config,
             "log_path": self.log_path,
         }
+
+
+class ConsoleBridge(object):
+    """Substituto do sshd no Windows: console do guest numa porta TCP de loopback (sem criptografia, só 127.0.0.1).
+
+    Conecte com PuTTY (tipo de conexão "Raw" ou "Telnet"), `ncat 127.0.0.1 <porta>` ou `telnet 127.0.0.1 <porta>`.
+    Mesma interface do SshBridge (start/stop/running/command/info), para o runtime não precisar saber a diferença.
+    """
+    def __init__(self, env_dir, port, shell_sock_path, user="root", bind="127.0.0.1"):
+        self.port = int(port); self.bind = bind; self.shell_sock_path = os.path.abspath(shell_sock_path)
+        self.srv = None; self.alive = False; self.last_error = None; self.conns = []
+        self.log_path = os.path.join(os.path.abspath(env_dir), "logs", "console-bridge.log")
+
+    def running(self):
+        return self.alive
+
+    def start(self):
+        import threading
+        if self.alive:
+            return True, "console TCP já em execução"
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind((self.bind, self.port)); s.listen(4)
+        except OSError as e:
+            self.last_error = str(e)
+            return False, "a porta %s:%d não pôde ser aberta: %s" % (self.bind, self.port, e)
+        self.srv = s; self.alive = True
+        threading.Thread(target=self._accept, daemon=True).start()
+        return True, "console do guest em telnet/raw %s:%d (Windows: sem sshd)" % (self.bind, self.port)
+
+    def _accept(self):
+        import threading
+        while self.alive:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._session, args=(c,), daemon=True).start()
+
+    @staticmethod
+    def _strip_telnet(d, st):
+        """Remove a negociação telnet (IAC ...) que clientes telnet mandam; `st` guarda o estado entre pacotes."""
+        out = bytearray()
+        for b in d:
+            m = st[0]
+            if m == 0:
+                if b == 255: st[0] = 1
+                else: out.append(b)
+            elif m == 1:
+                if b == 255: out.append(255); st[0] = 0
+                elif b in (251, 252, 253, 254): st[0] = 2
+                elif b == 250: st[0] = 3
+                else: st[0] = 0
+            elif m == 2: st[0] = 0
+            elif m == 3: st[0] = 4 if b == 255 else 3
+            elif m == 4: st[0] = 0 if b == 240 else 3
+        return bytes(out)
+
+    def _session(self, c):
+        import threading
+        from . import plat
+        try:
+            g = plat.try_connect(self.shell_sock_path)
+        except OSError as e:
+            try: c.sendall(("console do guest indisponivel: %s\r\n" % e).encode()); c.close()
+            except OSError: pass
+            return
+        self.conns += [c, g]
+        def down():
+            try:
+                while self.alive:
+                    d = g.recv(4096)
+                    if not d: break
+                    c.sendall(d)
+            except OSError: pass
+            for x in (c, g):
+                try: x.close()
+                except OSError: pass
+        threading.Thread(target=down, daemon=True).start()
+        st = [0]
+        try:
+            c.sendall(b"\r\n")
+            g.sendall(b"\n")                      # mostra o prompt do guest
+            while self.alive:
+                d = c.recv(4096)
+                if not d: break
+                d = self._strip_telnet(d, st)
+                if d: g.sendall(d.replace(b"\r\n", b"\n").replace(b"\r\0", b"\n").replace(b"\r", b"\n"))
+        except OSError: pass
+        for x in (c, g):
+            try: x.close()
+            except OSError: pass
+            try: self.conns.remove(x)
+            except ValueError: pass
+
+    def stop(self):
+        self.alive = False
+        for x in [self.srv] + list(self.conns):
+            try:
+                if x: x.close()
+            except OSError: pass
+        self.srv = None; self.conns = []
+
+    def command(self):
+        return "telnet %s %d" % (self.bind, self.port)
+
+    def info(self):
+        up = self.running()
+        note = ("Windows: o console do guest fica numa porta TCP de loopback, sem SSH (o sshd do Windows não serve a este uso sem "
+                "privilégios). Use PuTTY (Raw ou Telnet, host %s, porta %s), 'ncat %s %s' ou 'telnet %s %s'. "
+                "Só aceita conexões da própria máquina." % (self.bind, self.port, self.bind, self.port, self.bind, self.port))
+        if not up and self.last_error:
+            note += " Último erro: %s" % self.last_error
+        return {"port": self.port, "host": self.bind, "user": "", "key_path": "", "command": self.command(),
+                "state": "up" if up else "down", "note": note, "client_config": "", "log_path": self.log_path, "kind": "tcp-console"}
+
+
+if os.name == "nt":
+    SshBridge = ConsoleBridge          # noqa: F811 – no Windows, o "SSH" do IDEmu é o console TCP

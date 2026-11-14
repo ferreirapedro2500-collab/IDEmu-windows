@@ -1427,6 +1427,9 @@ window.IDE = window.IDE || {};
     ['o dicionário de codificação do iDrive 8 ainda não foi extraído: configure a PSdZData e reconstrua o ambiente', 'the iDrive 8 coding dictionary has not been extracted yet: set the PSdZData and rebuild the environment'],
     ['Reinicie o ambiente para o HMI ler a nova codificação.', 'Restart the environment so the HMI reads the new coding.'],
     ['A tabela de tipos está sendo montada a partir da sua PSdZData (cerca de 1 minuto). Tente de novo em instantes.', 'The type table is being built from your PSdZData (about a minute). Try again in a moment.'],
+    ['CIC ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma', 'CIC has not been ported to Windows yet: only iDrive 5/6 runs on this platform'],
+    ['iDrive 7 (MGU) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma', 'iDrive 7 (MGU) has not been ported to Windows yet: only iDrive 5/6 runs on this platform'],
+    ['iDrive 8 (MGU22) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma', 'iDrive 8 (MGU22) has not been ported to Windows yet: only iDrive 5/6 runs on this platform'],
   ];
 /* I18N-DICT-END */
 
@@ -1443,6 +1446,9 @@ window.IDE = window.IDE || {};
     ['falha ao extrair %s: %t', 'could not extract %s: %t'],
     ['arquivo grande demais para abrir aqui (%s MB): use "Mostrar no Finder"', 'file too large to open here (%s MB): use "Show in Finder"'],
     ['não consegui abrir o Finder: %s', 'could not open Finder: %s'],
+    ['não consegui abrir o gerenciador de arquivos: %s', 'could not open the file manager: %s'],
+    ['seletor nativo indisponível: %s', 'native file picker unavailable: %s'],
+    ["Windows: o console do guest fica numa porta TCP de loopback, sem SSH (o sshd do Windows não serve a este uso sem privilégios). Use PuTTY (Raw ou Telnet, host %s, porta %s), 'ncat %s %s' ou 'telnet %s %s'. Só aceita conexões da própria máquina.", "Windows: the guest console is on a loopback TCP port, without SSH (the Windows sshd cannot serve this without privileges). Use PuTTY (Raw or Telnet, host %s, port %s), 'ncat %s %s' or 'telnet %s %s'. Only connections from this computer are accepted."],
     ['VIN inválido: são 17 caracteres (você digitou %s)', 'Invalid VIN: it has 17 characters (you typed %s)'],
     ['o QEMU terminou (%s); veja o log do QEMU', 'QEMU exited (%s); see the QEMU log'],
     ['pacotes do CIC não encontrados (swfl_000003a6 e swfl_00000417 versão %s) na PSdZData nem em ~/Downloads/System files/ID4', 'CIC packages not found (swfl_000003a6 and swfl_00000417 version %s) in the PSdZData or in ~/Downloads/System files/ID4'],

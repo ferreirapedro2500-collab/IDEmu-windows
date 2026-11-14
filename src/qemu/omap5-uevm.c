@@ -21,8 +21,13 @@
 #include "target/arm/cpu.h"
 #include "target/arm/arm-powerctl.h"
 #include "hw/core/cpu.h"
+#ifdef _WIN32
+/* Windows: sem socket unix; o glhost publica a porta TCP de loopback no arquivo OMAP5_GLSOCK (ver idemu/plat.py) */
+#include "qemu/sockets.h"
+#else
 #include <sys/socket.h>
 #include <sys/un.h>
+#endif
 
 #define TYPE_OMAP5_UEVM MACHINE_TYPE_NAME("omap5-uevm")
 
@@ -188,6 +193,49 @@ static int glb_rw(int fd, void *b, size_t n, bool wr)
     return 0;
 }
 
+#ifdef _WIN32
+static void glb_close(int fd)
+{
+    closesocket(fd);
+}
+
+static int glb_connect(void)
+{
+    const char *path = getenv("OMAP5_GLSOCK");
+    char addr[64];
+    int port = 0, fd;
+    Error *err = NULL;
+    FILE *f = fopen(path ? path : "glbridge.sock", "r");
+    if (!f) {
+        return -1;
+    }
+    if (fscanf(f, "%d", &port) != 1) {
+        port = 0;
+    }
+    fclose(f);
+    if (port <= 0 || port > 65535) {
+        return -1;
+    }
+    snprintf(addr, sizeof(addr), "%d", port);
+    {
+        SocketAddress sa = { .type = SOCKET_ADDRESS_TYPE_INET };
+        sa.u.inet.host = (char *)"127.0.0.1";
+        sa.u.inet.port = addr;
+        fd = socket_connect(&sa, &err);
+    }
+    if (fd < 0) {
+        error_free(err);
+        return -1;
+    }
+    socket_set_nodelay(fd);       /* um pedido GL por ida e volta: sem Nagle */
+    return fd;
+}
+#else
+static void glb_close(int fd)
+{
+    close(fd);
+}
+
 static int glb_connect(void)
 {
     const char *path = getenv("OMAP5_GLSOCK");
@@ -203,6 +251,7 @@ static int glb_connect(void)
     }
     return fd;
 }
+#endif
 
 static void glb_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
@@ -221,7 +270,7 @@ static void glb_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     if (glb_rw(g->fd, &len, 4, true) || glb_rw(g->fd, g->ptr, len, true) ||
         glb_rw(g->fd, &rl, 4, false) || rl > GLB_HALF ||
         glb_rw(g->fd, g->ptr + GLB_HALF, rl, false)) {
-        close(g->fd);
+        glb_close(g->fd);
         g->fd = -1;
         return;
     }

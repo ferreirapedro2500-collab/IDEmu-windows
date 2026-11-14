@@ -154,4 +154,8 @@ def from_host(n,path,skip=lambda p:False):
         if os.path.isdir(p):
             k=n.kids.get(b) or N(b,0o40775); n.kids[b]=k; from_host(k,p,skip)
         elif os.path.isfile(p):
-            n.kids[b]=N(b,0o100755 if os.access(p,os.X_OK) else 0o100644,p,os.path.getsize(p))
+            if os.name=='nt':                       # NTFS não guarda o bit de execução: decide pelo conteúdo (ELF ou script)
+                with open(p,'rb') as fh: m=fh.read(4)
+                ex=m==b'\x7fELF' or m[:2]==b'#!'
+            else: ex=os.access(p,os.X_OK)
+            n.kids[b]=N(b,0o100755 if ex else 0o100644,p,os.path.getsize(p))

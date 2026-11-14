@@ -1,5 +1,5 @@
 """iDrive 8 (MGU22): monta a imagem a partir da PSdZData e roda QEMU `virt` + mguhost. Detalhes em docs/OUTRAS_GERACOES.md."""
-import _posixshmem, glob, json, mmap, os, shutil, struct, subprocess, sys, threading, time
+import glob, json, mmap, os, shutil, struct, subprocess, sys, threading, time
 from . import runtime, coding8
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,8 +16,13 @@ BUILD_STEPS = [('kernel e raiz', 10, 'Lendo o kernel e o sistema'), ('IVI e EXT'
 def image_ready():
     return os.path.isfile(OUT + '/base.cpio') and os.path.isfile(OUT + '/Image') and all(os.path.isfile(f'{OUT}/guest/{f}') for f in GUEST_FILES)
 
+try: import _posixshmem                     # só existe no macOS/Linux (iDrive 8 ainda não portado para o Windows)
+except ImportError: _posixshmem = None
+
 def build(psdz=None, log=print, progress=lambda p, s: None):
     """Monta mgu22/ com tools/mgu/build_image.py. A imagem é compartilhada por todos os ambientes iDrive 8."""
+    from . import plat
+    if plat.WINDOWS: raise RuntimeError('iDrive 8 (MGU22) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
     cmd = [sys.executable, '-u', TOOLS + '/build_image.py'] + ([psdz] if psdz else [])
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     tail = []
@@ -83,6 +88,8 @@ class MguRuntime(runtime.Runtime):
         runtime.Runtime.__init__(self, env_dir, env)
         self.debug = debug; self.ctl = self.run; self.console_in = os.path.join(self.run, 'console.in'); self._keep = None; self._sock = None
     def start(self, cold=False):
+        from . import plat
+        if plat.WINDOWS: raise RuntimeError('iDrive 8 (MGU22) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
         if not image_ready(): raise RuntimeError('imagem do iDrive 8 não montada')
         for d in (self.run, self.logd): os.makedirs(d, exist_ok=True)
         for f in ('frame.rgb', 'input.sock', 'console.in'):

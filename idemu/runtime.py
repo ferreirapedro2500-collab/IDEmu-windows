@@ -1,6 +1,6 @@
 """Execução de um ambiente: renderizador (glhost) + QEMU + console serial + canais (shell, dados) + CAN/GPS/SSH."""
 import os, sys, time, json, shlex, hashlib, socket, select, subprocess, threading, signal, mmap, struct, zlib, collections
-from . import mapsvc, catalog
+from . import mapsvc, catalog, plat
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -17,17 +17,12 @@ CPU = 'cortex-a15,cntfrq=6144000,has_el3=off,has_el2=off'
 SETBITS = '0x4a096804=2,0x4809a130=0x26,0x4a008f00=0x100,0x4a004400=0x100'
 # núcleos do OMAP5 emulados (1 ou 2). Com 2, cada vCPU roda numa thread do Mac (MTTCG) e o QNX (procnto-smp) distribui HMI e serviços entre eles.
 SMP = max(1, min(2, int(os.environ.get('IDEMU_SMP', '1') or 1)))
-QEMU_ARM = os.environ.get('IDEMU_QEMU_ARM') or os.path.join(BIN, 'qemu-system-arm')
+QEMU_ARM = os.environ.get('IDEMU_QEMU_ARM') or plat.exe(os.path.join(BIN, 'qemu-system-arm'))
+GLHOST = os.environ.get('IDEMU_GLHOST') or plat.exe(os.path.join(BIN, 'glhost'))
 
 def _unix_connect(path, timeout=30):
-    end = time.time() + timeout
-    while time.time() < end:
-        s = socket.socket(socket.AF_UNIX)
-        try:
-            s.connect(path); return s
-        except OSError:
-            s.close(); time.sleep(0.2)
-    raise RuntimeError('não conectou em ' + path)
+    """Conecta a um canal local (socket unix; no Windows, porta TCP publicada no arquivo `path`: ver plat.py)."""
+    return plat.connect(path, timeout)
 
 class ShellMux:
     """Serve um socket unix (shell.sock) ligado ao console de shell do guest (UART2)."""
@@ -36,9 +31,7 @@ class ShellMux:
         self.clients = []; self.lock = threading.Lock(); self.stop = False; self.up = False
         self.tail = collections.deque(maxlen=400)
     def start(self):
-        try: os.unlink(self.path)
-        except OSError: pass
-        self.srv = socket.socket(socket.AF_UNIX); self.srv.bind(self.path); self.srv.listen(8)
+        self.srv = plat.listen(self.path)
         threading.Thread(target=self._accept, daemon=True).start()
         threading.Thread(target=self._pump, daemon=True).start()
     def _accept(self):
@@ -87,9 +80,7 @@ class ConsoleMux(ShellMux):
     def __init__(self, path, write):
         ShellMux.__init__(self, None, path); self._write = write; self.up = True
     def start(self):
-        try: os.unlink(self.path)
-        except OSError: pass
-        self.srv = socket.socket(socket.AF_UNIX); self.srv.bind(self.path); self.srv.listen(8)
+        self.srv = plat.listen(self.path)
         threading.Thread(target=self._accept, daemon=True).start()
     def _client(self, c):
         try:
@@ -136,7 +127,7 @@ class Runtime:
     def __init__(self, env_dir, env, run_root=None):
         self.env_dir, self.env = env_dir, env
         self.id = env['id']
-        self.run = os.path.join(run_root or '/tmp/idemu-%d' % os.getuid(), self.id)
+        self.run = os.path.join(run_root or plat.run_root(), self.id)
         self.img = os.path.join(env_dir, 'images'); self.logd = os.path.join(env_dir, 'logs')
         self.ctl = os.path.join(self.run, 'ctl')
         self.state = 'stopped'; self.err = None; self.t0 = None; self.step = ''; self.pct = 0
@@ -152,7 +143,7 @@ class Runtime:
     def snapshot_key(self):
         """Muda quando qualquer coisa que o snapshot embute muda: imagens (inclusive shim.img, onde fica a codificação), binários, CPU."""
         parts = [SNAP_FORMAT, CPU, SETBITS, os.environ.get('IDEMU_CPU'), os.environ.get('IDEMU_QEMU_EXTRA')] + ([SMP] if SMP > 1 else [])
-        for p in [os.path.join(self.img, n) for n in ('boot.ifs', 'sda.img', 'sdb.img', 'shim.img')] + [QEMU_ARM, os.path.join(BIN, 'glhost'), os.path.join(HERE, 'data', 'stub.bin')]:
+        for p in [os.path.join(self.img, n) for n in ('boot.ifs', 'sda.img', 'sdb.img', 'shim.img')] + [QEMU_ARM, GLHOST, os.path.join(HERE, 'data', 'stub.bin')]:
             st = os.stat(p); parts.append((os.path.basename(p), st.st_size, int(st.st_mtime)))
         return hashlib.sha256(repr(parts).encode()).hexdigest()
 
@@ -185,7 +176,7 @@ class Runtime:
             if not os.path.isfile(os.path.join(self.img, n)):
                 raise RuntimeError('imagem ausente (%s): compile o ambiente primeiro' % n)
         import shutil
-        shutil.rmtree(self.run, ignore_errors=True); os.makedirs(self.ctl); os.makedirs(self.logd, exist_ok=True)
+        shutil.rmtree(self.run, ignore_errors=True); os.makedirs(self.ctl, exist_ok=True); os.makedirs(self.logd, exist_ok=True)
         self.state = 'booting'; self.err = None; self.t0 = time.time(); self.marks = {}; self.step = 'Iniciando'; self.pct = 1; self._fm = None; self._lastseq = None; self.fps_t = collections.deque(maxlen=400)
         self.stop_ev.clear()
         threading.Thread(target=self._boot, daemon=True).start()
@@ -212,15 +203,15 @@ class Runtime:
         if record:
             os.makedirs(self.snap_dir, exist_ok=True); env['GLHOST_RECORD'] = S + 'gl.rec.tmp'
         self.step = 'Iniciando renderizador'; self.pct = 3
-        self._spawn('gl', [B + 'glhost'], env=env, stdout=self._log('renderer.log'), stderr=subprocess.STDOUT, cwd=B)
+        self._spawn('gl', [GLHOST], env=env, stdout=self._log('renderer.log'), stderr=subprocess.STDOUT, cwd=B)
         I = self.img + '/'
         args = [QEMU_ARM, '-M', 'omap5-uevm', '-m', '2048', '-cpu', os.environ.get('IDEMU_CPU', CPU), '-display', 'none',
                 '-smp', str(SMP), '-accel', 'tcg,thread=multi' if SMP > 1 else 'tcg',
-                '-serial', 'unix:%s,server,nowait' % ser, '-serial', 'unix:%s,server,nowait' % ser2,
-                '-serial', 'unix:%s,server,nowait' % ser1, '-serial', 'unix:%s,server,nowait' % ser4, '-monitor', 'none',
-                '-qmp', 'unix:%sqmp.sock,server,nowait' % R]
+                '-serial', plat.qemu_server(ser), '-serial', plat.qemu_server(ser2),
+                '-serial', plat.qemu_server(ser1), '-serial', plat.qemu_server(ser4), '-monitor', 'none',
+                '-qmp', plat.qemu_server(R + 'qmp.sock')]
         if resume:
-            args += ['-S', '-incoming', 'file:%svm.bin' % S]
+            args += ['-S', '-incoming', plat.file_uri(S + 'vm.bin')]
         else:
             for _ in range(100):
                 if os.path.exists(gls): break
@@ -261,7 +252,7 @@ class Runtime:
 
     def _reset_run(self):
         import shutil
-        shutil.rmtree(self.run, ignore_errors=True); os.makedirs(self.ctl); self._fm = None; self._lastseq = None
+        self._close_frame(); shutil.rmtree(self.run, ignore_errors=True); os.makedirs(self.ctl, exist_ok=True); self._fm = None; self._lastseq = None
         self.t0 = time.time(); self.marks = {}
 
     def _boot_resume(self):
@@ -402,7 +393,7 @@ class Runtime:
                 raise RuntimeError('o renderizador não encerrou a gravação')
             host = {'v850': v.export_state() if v else None}
             self.qmp.cmd('migrate-set-parameters', **{'max-bandwidth': 1 << 40})
-            self.qmp.cmd('migrate', uri='file:%svm.bin.tmp' % S)
+            self.qmp.cmd('migrate', uri=plat.file_uri(S + 'vm.bin.tmp'))
             while True:
                 r = self.qmp.cmd('query-migrate')
                 if r.get('status') == 'completed': break
@@ -448,10 +439,8 @@ class Runtime:
         try: f = open(os.path.join(self.logd, 'boot-profile.csv'), 'w'); f.write('t_s,cpu_pct,frame_seq,step\n')
         except OSError: return
         while not self.stop_ev.is_set() and self.q is not None and self.q.poll() is None:
-            try:
-                o = subprocess.run(['ps', '-o', 'time=', '-p', str(self.q.pid)], capture_output=True, text=True, timeout=3).stdout.strip()
-                m, sec = o.split(':'); c = int(m) * 60 + float(sec)
-            except Exception:
+            c = plat.cpu_seconds(self.q.pid)
+            if c is None:
                 time.sleep(1); continue
             now = time.time()
             if last_c is not None:
@@ -541,6 +530,7 @@ class Runtime:
         """Popen que não deixa processo órfão: com o ambiente já parado, não inicia; o processo novo fica em self.<attr> antes que stop() possa olhar."""
         with self._life:
             if self.stop_ev.is_set(): raise BootStopped()
+            for k, v in plat.no_window_kwargs().items(): kw.setdefault(k, v)      # Windows: QEMU e glhost sem janela de console
             p = subprocess.Popen(*a, **kw); setattr(self, attr, p)
             return p
 
@@ -573,7 +563,7 @@ class Runtime:
             except Exception:
                 try: p.kill()
                 except Exception: pass
-        self.q = self.gl = None; self._fm = None
+        self.q = self.gl = None; self._close_frame()
 
     # ---------- status ----------
     def status(self):
@@ -590,6 +580,12 @@ class Runtime:
         return round(len(ft) / 3.0, 1)
 
     # ---------- quadro de vídeo ----------
+    def _close_frame(self):
+        fm, self._fm = self._fm, None                         # no Windows um arquivo mapeado não pode ser apagado: fecha antes de limpar a pasta de execução
+        if fm is not None:
+            try: fm.close()
+            except Exception: pass
+
     def _map(self):
         # o renderizador pode recriar ou aumentar o arquivo (superfície nova): mapeia de novo quando o inode ou o tamanho mudam, em vez de ler um mapeamento velho
         try: st = os.stat(self.frame_path); key = (st.st_ino, st.st_size)
@@ -645,8 +641,8 @@ class Runtime:
     def send_cmd(self, line):
         with self._cmd_lock:
             if getattr(self, '_insock', None) is None:
-                self._insock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            self._insock.sendto(line.encode(), os.path.join(self.ctl, 'input.sock'))
+                self._insock = plat.dgram_client()
+            plat.dgram_send(self._insock, line.encode(), os.path.join(self.ctl, 'input.sock'))
 
     def key(self, code, val): self.send_cmd('1 %d %d' % (code, val))
     def touch(self, x, y, down, move=False):

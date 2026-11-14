@@ -29,13 +29,37 @@ function waitUp(p, tries = 120) {
   });
 }
 
+const WIN = process.platform === 'win32';
+
+function pythonCmd() {
+  // IDEMU_PYTHON manda; no Windows o lançador "py" (python.org) ou python.exe do PATH; no macOS o Python do sistema
+  if (process.env.IDEMU_PYTHON) return { cmd: process.env.IDEMU_PYTHON, pre: [] };
+  if (WIN) return { cmd: 'py', pre: ['-3'] };
+  return { cmd: '/usr/bin/python3', pre: [] };
+}
+
 function startServer(p) {
-  const py = process.env.IDEMU_PYTHON || '/usr/bin/python3';
-  server = spawn(py, ['-m', 'idemu', 'gui', '--no-browser', '--port', String(p)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const py = pythonCmd();
+  const args = py.pre.concat(['-m', 'idemu', 'gui', '--no-browser', '--port', String(p)]);
+  // no Windows não há SIGTERM entre processos: o servidor encerra (e para QEMU/glhost) quando o stdin fecha
+  if (WIN) args.push('--exit-on-stdin-eof');
+  const child = spawn(py.cmd, args, { cwd: ROOT, stdio: [WIN ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true });
+  server = child;
+  let failed = false;
+  child.on('error', (e) => {
+    failed = true;
+    if (server !== child) return;
+    if (WIN && !process.env.IDEMU_PYTHON && py.cmd === 'py') {     // sem o lançador "py": tenta python.exe
+      process.env.IDEMU_PYTHON = 'python'; startServer(p); return;
+    }
+    server = null;
+    if (!quitting) { dialog.showErrorBox('IDEmu', 'Não consegui iniciar o Python (' + py.cmd + '): ' + e.message + '\nDefina IDEMU_PYTHON com o caminho do python.exe.'); app.quit(); }
+  });
   let log = '';
   const keep = (d) => { log = (log + d.toString()).slice(-4000); };
-  server.stdout.on('data', keep); server.stderr.on('data', keep);
-  server.on('exit', (code) => {
+  child.stdout.on('data', keep); child.stderr.on('data', keep);
+  child.on('exit', (code) => {
+    if (failed || server !== child) return;
     server = null;
     if (!quitting) { dialog.showErrorBox('IDEmu', 'O servidor do IDEmu encerrou (código ' + code + ').\n\n' + log.slice(-1200)); app.quit(); }
   });
@@ -43,7 +67,12 @@ function startServer(p) {
 
 function stopServer() {
   quitting = true;
-  if (server) { try { server.kill('SIGTERM'); } catch (e) { /* já saiu */ } const s = server; setTimeout(() => { try { s.kill('SIGKILL'); } catch (e) { /* ok */ } }, 4000).unref(); }
+  if (server) {
+    const s = server;
+    if (WIN) { try { s.stdin.end(); } catch (e) { /* já saiu */ } }          // encerramento limpo (ver startServer)
+    else { try { s.kill('SIGTERM'); } catch (e) { /* já saiu */ } }
+    setTimeout(() => { try { s.kill('SIGKILL'); } catch (e) { /* ok */ } }, 4000).unref();
+  }
 }
 
 function createWindow() {
@@ -76,7 +105,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { role: 'appMenu' }, { role: 'editMenu' },
+      ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : [{ role: 'fileMenu' }]), { role: 'editMenu' },
       { label: 'Visualizar', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
       { role: 'windowMenu' },
     ]));

@@ -13,10 +13,12 @@ def main(argv):
     if not argv or argv[0] in ('-h', '--help', 'help'):
         print(USAGE); return 0
     cmd = argv[0]
+    from . import plat
+    plat.kill_children_on_exit()              # Windows: QEMU/glhost não sobrevivem ao servidor
     if cmd == 'gui':
         port = 8765
         if '--port' in argv: port = int(argv[argv.index('--port') + 1])
-        server.serve(port=port, open_browser='--no-browser' not in argv); return 0
+        server.serve(port=port, open_browser='--no-browser' not in argv, exit_on_stdin_eof='--exit-on-stdin-eof' in argv); return 0
     A = server.APP
     if cmd == 'list':
         for e in A.list_envs(): print('%-20s %-6s %-5s %s' % (e['id'], e['chassis'], e['brand'], e['build']['state']))

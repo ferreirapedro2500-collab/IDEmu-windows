@@ -1,19 +1,9 @@
 #include <time.h>
-#define GL_SILENCE_DEPRECATION 1
-#include <GLUT/glut.h>
-#include <OpenGL/gl.h>
-#include <OpenGL/glext.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/stat.h>
-#include <strings.h>
+#include "compat.h"          /* GL/GLUT, sockets/portas, quadro compartilhado: macOS ou Windows */
 #include "glops.h"
-#include <OpenGL/OpenGL.h>
 typedef unsigned int u32;
 static const char *SOCK="/tmp/glbridge.sock";
 static const char *CTL="/tmp"; static char pbuf_[8][512]; static int pidx_;
@@ -52,11 +42,9 @@ static void draw_panel(void);
 static void shot(void){ if(access(P("glshot.req"),F_OK)) return; unlink(P("glshot.req")); dump_stats();
   unsigned char *b=malloc(sw*sh*3); glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,screen_fbo); glPixelStorei(GL_PACK_ALIGNMENT,1); glReadPixels(0,0,sw,sh,GL_RGB,GL_UNSIGNED_BYTE,b); glPixelStorei(GL_PACK_ALIGNMENT,4);
   FILE*f=fopen(P("glshot.ppm"),"wb"); fprintf(f,"P6\n%d %d\n255\n",sw,sh); for(int y=sh-1;y>=0;y--) fwrite(b+y*sw*3,1,sw*3,f); fclose(f); free(b); fprintf(stderr,"[host] screenshot saved\n"); }
-#include <sys/mman.h>
-#include <fcntl.h>
 static unsigned char *fmap; static size_t fmaplen; static double fexp_t; static int fdirty;
 static int map_readback(unsigned char *out); static GLuint map_present_tex(void);
-static void export_frame(void){ if(!fmap) return; fdirty=1; struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); double t=ts.tv_sec+ts.tv_nsec*1e-9; if(t-fexp_t<0.033) return; fexp_t=t; fdirty=0; GLint sfbo; glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT,&sfbo);
+static void export_frame(void){ if(!fmap) return; fdirty=1; double t=mono_now(); if(t-fexp_t<0.033) return; fexp_t=t; fdirty=0; GLint sfbo; glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT,&sfbo);
   size_t need=32+(size_t)sw*sh*3; if(need>fmaplen) return; static unsigned char *tmp; static size_t tcap; if(tcap<(size_t)sw*sh*3){ tcap=(size_t)sw*sh*3; tmp=realloc(tmp,tcap); }
   if(!map_readback(tmp)){ GLint pbo=0,rl=0,sr=0,sp=0; glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&pbo); glGetIntegerv(GL_PACK_ROW_LENGTH,&rl); glGetIntegerv(GL_PACK_SKIP_ROWS,&sr); glGetIntegerv(GL_PACK_SKIP_PIXELS,&sp);
     glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glPixelStorei(GL_PACK_ROW_LENGTH,0); glPixelStorei(GL_PACK_SKIP_ROWS,0); glPixelStorei(GL_PACK_SKIP_PIXELS,0);   /* estado do guest não pode estourar tmp */
@@ -116,8 +104,8 @@ static void input_ev(u32 type,u32 code,u32 val,u32 unit){ if(inq_n>=1024) return
 static void map_cmd(const char *l);
 static void input_line(const char *l){ u32 t,c,v,u=0xffff; if(l[0]=='M'&&l[1]==' '){ map_cmd(l); return; } if(sscanf(l,"%u %u %d %u",&t,&c,(int*)&v,&u)>=3){ if(t==100) on_mouse(GLUT_LEFT_BUTTON,GLUT_DOWN,c,v); else if(t==101) on_mouse(GLUT_LEFT_BUTTON,GLUT_UP,c,v); else if(t==102) on_motion(c,v); else if(t==103) on_key((unsigned char)c,0,0); else if(t==104) on_keyup((unsigned char)c,0,0); else if(t==105) on_special(c,0,0); else input_ev(t,c,v,u); } }
 /* entrada por socket de datagramas (<ctl>/input.sock): com o arquivo glinput.cmd, um evento escrito entre a leitura e o unlink se perdia (teclas "sumiam") */
-static int ifd=-1;
-static void poll_cmdfile(void){ if(ifd>=0){ char l[128]; ssize_t n; while((n=recv(ifd,l,sizeof l-1,MSG_DONTWAIT))>0){ l[n]=0; input_line(l); } } if(access(P("glinput.cmd"),F_OK)) return; FILE*f=fopen(P("glinput.cmd"),"r"); if(!f) return; char l[128]; while(fgets(l,128,f)) input_line(l); fclose(f); unlink(P("glinput.cmd")); }
+static ipc_fd ifd=IPC_BAD;
+static void poll_cmdfile(void){ if(ifd!=IPC_BAD){ char l[128]; int n; while((n=ipc_dgram_recv(ifd,l,sizeof l-1))>0){ l[n]=0; input_line(l); } } if(access(P("glinput.cmd"),F_OK)) return; FILE*f=fopen(P("glinput.cmd"),"r"); if(!f) return; char l[128]; while(fgets(l,128,f)) input_line(l); fclose(f); unlink(P("glinput.cmd")); }
 #include "panel.c"
 static u32 *rp; static u32 rl;   /* reply words */
 static u32 repbuf[(8<<20)/4];
@@ -192,27 +180,27 @@ static void process(u32 *w,u32 nbytes){
     if(verbose&&op<OP_GEN&&0) {}
   }
 }
-static int lfd=-1,cfd=-1; static u32 *reqbuf; static u32 reqcap;
-static int rd(int fd,void*b,size_t n){ char*p=b; while(n){ ssize_t r=recv(fd,p,n,0); if(r<=0) return -1; p+=r; n-=r; } return 0; }
-static int wr(int fd,const void*b,size_t n){ const char*p=b; while(n){ ssize_t r=send(fd,p,n,0); if(r<=0) return -1; p+=r; n-=r; } return 0; }
+static ipc_fd lfd=IPC_BAD,cfd=IPC_BAD; static u32 *reqbuf; static u32 reqcap;
+static int rd(ipc_fd fd,void*b,size_t n){ char*p=b; while(n){ int c=n>(1u<<30)?(1<<30):(int)n; int r=(int)recv(fd,p,c,0); if(r<=0) return -1; p+=r; n-=r; } return 0; }
+static int wr(ipc_fd fd,const void*b,size_t n){ const char*p=b; while(n){ int c=n>(1u<<30)?(1<<30):(int)n; int r=(int)send(fd,p,c,0); if(r<=0) return -1; p+=r; n-=r; } return 0; }
 static int cfd_busy_guard(void){ return 0; }
-static double now_s(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return ts.tv_sec+ts.tv_nsec*1e-9; }
+static double now_s(void){ return mono_now(); }
 static void idle(void){
   static double last_ctl; double t0=now_s();
   if(panel_dirty&&window_shown){ panel_dirty=0; if(!cfd_busy_guard()) present(); }
   if(t0-last_ctl>0.008){ last_ctl=t0; map_tick(t0); poll_cmdfile(); poll_dbg(); rec_poll(); if(fdirty) export_frame(); if(!access(P("gltrace.req"),F_OK)){ unlink(P("gltrace.req")); gltrace=1500; fprintf(stderr,"[host] gl trace on\n"); } { static int ctr; if(++ctr%32==0){ GLint fb; glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT,&fb); shot(); glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,fb); } } }
   /* o vCPU fica parado (com o BQL) até a resposta: enquanto houver pedidos, não volta ao laço do GLUT, que custa muito mais que o pedido */
   do {
-    struct pollfd pf[2]; int n=0; pf[n].fd=lfd; pf[n].events=POLLIN; n++; if(cfd>=0){ pf[n].fd=cfd; pf[n].events=POLLIN; n++; }
-    if(poll(pf,n,fdirty?1:4)<=0) return;
-    if(pf[0].revents&POLLIN){ int f=accept(lfd,0,0); if(f>=0){ if(cfd>=0) close(cfd); cfd=f; fprintf(stderr,"[host] guest connected\n"); } }
-    if(n>1&&(pf[1].revents&(POLLIN|POLLHUP))){
-      u32 len; if(rd(cfd,&len,4)){ close(cfd); cfd=-1; fprintf(stderr,"[host] guest disconnected\n"); return; }
-      if(len>(64u<<20)){ fprintf(stderr,"[host] request too large (%u)\n",len); close(cfd); cfd=-1; return; }
-      if(len>reqcap){ reqcap=len+4096; reqbuf=realloc(reqbuf,reqcap); if(!reqbuf){ reqcap=0; close(cfd); cfd=-1; return; } }
-      if(rd(cfd,reqbuf,len)){ close(cfd); cfd=-1; return; }
+    ipc_pollfd pf[2]; int n=0; memset(pf,0,sizeof pf); pf[n].fd=lfd; pf[n].events=POLLIN; n++; if(cfd!=IPC_BAD){ pf[n].fd=cfd; pf[n].events=POLLIN; n++; }
+    if(ipc_poll(pf,n,fdirty?1:4)<=0) return;
+    if(pf[0].revents&POLLIN){ ipc_fd f=ipc_accept(lfd); if(f!=IPC_BAD){ if(cfd!=IPC_BAD) ipc_close(cfd); cfd=f; fprintf(stderr,"[host] guest connected\n"); } }
+    if(n>1&&(pf[1].revents&(POLLIN|POLLHUP|POLLERR))){
+      u32 len; if(rd(cfd,&len,4)){ ipc_close(cfd); cfd=IPC_BAD; fprintf(stderr,"[host] guest disconnected\n"); return; }
+      if(len>(64u<<20)){ fprintf(stderr,"[host] request too large (%u)\n",len); ipc_close(cfd); cfd=IPC_BAD; return; }
+      if(len>reqcap){ reqcap=len+4096; reqbuf=realloc(reqbuf,reqcap); if(!reqbuf){ reqcap=0; ipc_close(cfd); cfd=IPC_BAD; return; } }
+      if(rd(cfd,reqbuf,len)){ ipc_close(cfd); cfd=IPC_BAD; return; }
       rec_write(reqbuf,len); process(reqbuf,len);
-      u32 rlen=rl; if(wr(cfd,&rlen,4)||wr(cfd,repbuf,rlen)){ close(cfd); cfd=-1; }
+      u32 rlen=rl; if(wr(cfd,&rlen,4)||wr(cfd,repbuf,rlen)){ ipc_close(cfd); cfd=IPC_BAD; }
     }
   } while(now_s()-t0<0.008);
 }
@@ -225,21 +213,22 @@ static int replay_file(const char *path){
 static void display(void){ panel_dirty=1; }
 static void reshape(int w,int h){ winw=w; winh=h; }
 int main(int argc,char**argv){
-  glutInit(&argc,argv); verbose=getenv("GLHOST_VERBOSE")!=NULL; nogl=getenv("GLHOST_NOGL")!=NULL;
+  compat_init(); glutInit(&argc,argv); verbose=getenv("GLHOST_VERBOSE")!=NULL; nogl=getenv("GLHOST_NOGL")!=NULL;
   const char*sc=getenv("GLHOST_SOCK"); if(sc) SOCK=sc;
   if(getenv("GLHOST_CTL")) CTL=getenv("GLHOST_CTL");
-  if(getenv("GLHOST_FRAME")){ int ff=open(getenv("GLHOST_FRAME"),O_RDWR|O_CREAT,0644); fmaplen=32+1440*540*3; if(ff>=0&&ftruncate(ff,fmaplen)==0){ fmap=mmap(0,fmaplen,PROT_READ|PROT_WRITE,MAP_SHARED,ff,0); if(fmap==MAP_FAILED) fmap=0; } }
+  if(getenv("GLHOST_FRAME")){ fmaplen=32+1440*540*3; fmap=frame_map(getenv("GLHOST_FRAME"),fmaplen); }
   if(getenv("GLHOST_W")) winw=atoi(getenv("GLHOST_W")); if(getenv("GLHOST_H")) winh=atoi(getenv("GLHOST_H"));
   glutInitDisplayMode(GLUT_RGBA|GLUT_DOUBLE|GLUT_DEPTH|GLUT_STENCIL); glutInitWindowSize(winw,winh);
   glutCreateWindow("BMW iDrive 6 (QEMU OMAP5)"); glutDisplayFunc(display); glutReshapeFunc(reshape); glutIdleFunc(idle); glutMouseFunc(on_mouse); glutMotionFunc(on_motion); glutKeyboardFunc(on_key); glutKeyboardUpFunc(on_keyup); glutSpecialFunc(on_special); glutSpecialUpFunc(on_specialup); glutIgnoreKeyRepeat(1);
+  gl_load();
   fprintf(stderr,"[host] GL_VERSION=%s RENDERER=%s\n",glGetString(GL_VERSION),glGetString(GL_RENDERER));
   load_index(); ensure_screen(1440,540); window_shown=getenv("GLHOST_SHOW")!=NULL; if(!window_shown) glutHideWindow();
-  { GLint si=0; CGLSetParameter(CGLGetCurrentContext(),kCGLCPSwapInterval,&si); }
+  gl_no_vsync();
   if(getenv("GLHOST_LOG_MB")) glog_max=atoll(getenv("GLHOST_LOG_MB"))<<20;
   if(getenv("GLHOST_REPLAY")&&replay_file(getenv("GLHOST_REPLAY"))) return 3;
   if(getenv("GLHOST_RECORD")){ recf=fopen(getenv("GLHOST_RECORD"),"wb"); if(recf){ static char rb[1<<20]; setvbuf(recf,rb,_IOFBF,sizeof rb); } }
-  { struct sockaddr_un ia={.sun_family=AF_UNIX}; snprintf(ia.sun_path,sizeof ia.sun_path,"%s",P("input.sock")); unlink(ia.sun_path); ifd=socket(AF_UNIX,SOCK_DGRAM,0); if(ifd>=0&&bind(ifd,(struct sockaddr*)&ia,sizeof ia)){ close(ifd); ifd=-1; } if(ifd>=0){ int rb=256*1024; setsockopt(ifd,SOL_SOCKET,SO_RCVBUF,&rb,sizeof rb); } }
-  unlink(SOCK); lfd=socket(AF_UNIX,SOCK_STREAM,0); struct sockaddr_un sa={.sun_family=AF_UNIX}; strncpy(sa.sun_path,SOCK,sizeof sa.sun_path-1);
-  if(bind(lfd,(struct sockaddr*)&sa,sizeof sa)||listen(lfd,1)){ perror("bind"); return 1; }
+  ifd=ipc_dgram_bind(P("input.sock"));
+  lfd=ipc_listen_stream(SOCK);
+  if(lfd==IPC_BAD){ perror("bind"); return 1; }
   fprintf(stderr,"[host] listening on %s\n",SOCK);
   glutMainLoop(); return 0; }

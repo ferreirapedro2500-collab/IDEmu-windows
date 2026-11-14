@@ -124,6 +124,8 @@ def apply_userfiles(flash, env_dir, log=lambda m: None):
 
 
 def build(psdz=None, log=print, progress=lambda p, s: None):
+    from . import plat
+    if plat.WINDOWS: raise RuntimeError('CIC ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
     pkg = find_pkg(psdz)
     if not pkg:
         raise RuntimeError('pacotes do CIC não encontrados (swfl_000003a6 e swfl_00000417 versão %s) na PSdZData nem em '
@@ -171,6 +173,8 @@ class CicRuntime(runtime.Runtime):
     def drop_snapshot(self): pass
 
     def start(self, cold=False):
+        from . import plat
+        if plat.WINDOWS: raise RuntimeError('CIC ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
         if self.state in ('booting', 'running'): return
         if os.path.isfile(DEV_QEMU) and (not os.path.isfile(QEMU) or os.path.getmtime(DEV_QEMU) > os.path.getmtime(QEMU)):
             shutil.copy2(DEV_QEMU, QEMU)               # QEMU recompilado por src/cic/build.sh

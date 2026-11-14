@@ -14,7 +14,6 @@ para poder ser carregado direto pelo sshshell.py (ForceCommand).
 """
 import base64
 import binascii
-import fcntl
 import hashlib
 import os
 import re
@@ -83,12 +82,10 @@ class GuestSession(object):
         if self.use_lock:
             self._acquire_lock()
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(5.0)
+            from . import plat
             try:
-                s.connect(self.sock_path)
+                s = plat.try_connect(self.sock_path)
             except (OSError, socket.error) as e:
-                s.close()
                 raise GuestError("console do guest indisponível (%s): %s" % (self.sock_path, e))
             s.setblocking(False)
             self.sock = s
@@ -106,27 +103,19 @@ class GuestSession(object):
         self._release_lock()
 
     def _acquire_lock(self):
-        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        mode = (fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX) | fcntl.LOCK_NB
+        from . import plat
+        lk = plat.FileLock(self.lock_path, self.shared)
         deadline = time.monotonic() + self.lock_timeout
-        while True:
-            try:
-                fcntl.flock(fd, mode)
-                break
-            except (OSError, IOError):
-                if time.monotonic() >= deadline:
-                    os.close(fd)
-                    raise GuestError("console do guest ocupado (outra sessão/comando em uso)")
-                time.sleep(0.05)
-        self._lockfd = fd
+        while not lk.try_acquire():
+            if time.monotonic() >= deadline:
+                raise GuestError("console do guest ocupado (outra sessão/comando em uso)")
+            time.sleep(0.05)
+        self._lockfd = lk
 
     def _release_lock(self):
-        if self._lockfd is not None:
-            try:
-                fcntl.flock(self._lockfd, fcntl.LOCK_UN)
-            finally:
-                os.close(self._lockfd)
-                self._lockfd = None
+        lk, self._lockfd = self._lockfd, None
+        if lk is not None:
+            lk.release()
 
     # --- I/O baixo nível -----------------------------------------------
     def send(self, data):

@@ -63,6 +63,8 @@ def required_packages(psdz):
 
 def build(psdz, log=print, progress=lambda p, s: None):
     """Extrai app + data (HAR) para uma pasta de trabalho, aplica o overlay do IDEmu, os patches e grava mgu7/root.img + mgu7/bzImage (≈ 3,3 GB temporários)."""
+    from . import plat
+    if plat.WINDOWS: raise RuntimeError('iDrive 7 (MGU) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
     if not psdz: raise RuntimeError('escolha a pasta da PSdZData nas configurações')
     work = os.path.join(OUT, 'work'); root = os.path.join(work, 'root')
     shutil.rmtree(work, ignore_errors=True); os.makedirs(root)
@@ -163,6 +165,8 @@ class Mgu7Runtime(runtime.Runtime):
         self.ctl = self.run; self.frame_path = os.path.join(self.run, 'frame.rgba'); self._lastseq = None
         self.gl = self.q = self.tscfix = None; self.shm = None; self.coding_blob = None; self.wl_ready = threading.Event(); self.snap_dir = os.path.join(env_dir, 'snapshot'); self.snap_state = ''; self._restored = False; self.mon_path = os.path.join(self.run, 'mon.sock'); self.overlay = None; self._con = None; self._con_lock = threading.Lock(); self._inp = None; self._inp_lock = threading.Lock(); self._t_down = 0.0
     def start(self, cold=False):
+        from . import plat
+        if plat.WINDOWS: raise RuntimeError('iDrive 7 (MGU) ainda não foi portado para o Windows: só o iDrive 5/6 roda nesta plataforma')
         self._cold = bool(cold)
         if not image_ready(): raise RuntimeError('imagem do iDrive 7 não montada')
         find_qemu()

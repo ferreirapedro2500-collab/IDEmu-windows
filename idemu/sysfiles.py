@@ -240,7 +240,7 @@ def listdir(env, env_dir, rel):
         e = {'name': n, 'dir': stat.S_ISDIR(st.st_mode), 'size': st.st_size, 'mode': '%o' % (st.st_mode & 0o7777)}
         if stat.S_ISLNK(st.st_mode): e['link'] = os.readlink(q)
         ents.append(e)
-    r = os.path.relpath(p, d); r = '' if r == '.' else r
+    r = os.path.relpath(p, d).replace(os.sep, '/'); r = '' if r == '.' else r      # a interface usa '/' (no Windows relpath devolve '\\')
     return {'path': r, 'parent': (os.path.dirname(r) if r else None), 'root': d, 'entries': ents, 'status': status(env, env_dir)}
 
 def read(env, env_dir, rel, limit=64 << 20):
@@ -263,8 +263,9 @@ def reveal(env, env_dir, rel):
     try:
         d = _need(env, env_dir); p = resolve(d, rel)
     except ValueError as e: raise ApiError(str(e), 400)
-    r = subprocess.run(['open', '-R', p] if os.path.isfile(p) else ['open', p], capture_output=True, text=True)
-    if r.returncode: raise ApiError('não consegui abrir o Finder: %s' % r.stderr.strip()[:160], 500)
+    from . import plat
+    ok, err = plat.open_path(p, reveal=True)
+    if not ok: raise ApiError('não consegui abrir o gerenciador de arquivos: %s' % err[:160], 500)
     return {'ok': True}
 
 def remove(env, env_dir):

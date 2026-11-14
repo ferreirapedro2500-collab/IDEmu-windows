@@ -6,6 +6,7 @@ O HMI só precisa de uma imagem na superfície de mapa; quem entrega aqui é o g
 Por padrão não há fonte de rede (`map_source` = "off"): nada sai desta máquina e só o que já estiver no cache aparece. Ligar a fonte manda a região do GPS
 virtual ao servidor de blocos. Não é o motor de navegação da BMW: sem rotas, sem busca de endereço, sem dados NDS."""
 import os, queue, socket, threading, time, urllib.request
+from . import plat
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.environ.get('IDEMU_MAPCACHE') or os.path.join(HERE, 'mapcache')
@@ -28,7 +29,7 @@ class MapService:
         self._q = queue.LifoQueue(256)
         self._pend, self._failed = set(), {}
         self._lock = threading.Lock()
-        self._out = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self._out = plat.dgram_client()
         self._in = None
         self._last_pos = None
 
@@ -36,7 +37,7 @@ class MapService:
     def _send(self, line):
         for _ in range(5):
             try:
-                self._out.sendto(line.encode(), os.path.join(self.ctl, 'input.sock'))
+                plat.dgram_send(self._out, line.encode(), os.path.join(self.ctl, 'input.sock'))
                 return
             except BlockingIOError:
                 time.sleep(0.02)
@@ -184,12 +185,7 @@ class MapService:
     def start(self):
         os.makedirs(CACHE, exist_ok=True)
         path = os.path.join(self.ctl, 'map.sock')
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        self._in = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        self._in.bind(path)
+        self._in = plat.dgram_server(path)
         self._in.settimeout(0.5)
         for fn, name in ((self._listener, 'map-req'), (self._position_loop, 'map-pos'), (self._worker, 'map-net1'), (self._worker, 'map-net2')):
             threading.Thread(target=fn, daemon=True, name=name).start()

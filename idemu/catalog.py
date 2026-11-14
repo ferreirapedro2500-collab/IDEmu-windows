@@ -255,7 +255,8 @@ def stage_file(path, kind):
     dst = os.path.join(d, n)
     try:
         if os.path.lexists(dst): os.unlink(dst)
-        os.symlink(path, dst)
+        from . import plat
+        plat.link_file(path, dst)
     except OSError as e: return False, 'não consegui gravar o link: %s' % e
     return True, 'ok'
 
@@ -271,6 +272,7 @@ def effective_psdz(kind):
             if not os.path.exists(dst):
                 try:
                     if os.path.lexists(dst): os.unlink(dst)
-                    os.symlink(i['path'], dst)
+                    from . import plat
+                    plat.link_file(i['path'], dst)
                 except OSError: pass
     return STAGE
