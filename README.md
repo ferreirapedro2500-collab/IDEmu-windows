@@ -1,4 +1,4 @@
-# IDEmu: a BMW iDrive head-unit emulator for macOS
+# Fork IDEmu: a BMW iDrive head-unit emulator for macOS to windows
 
 IDEmu runs the **original head-unit software** of BMW iDrive systems (HMI, window system and services) inside QEMU virtual machines, with its own
 web interface, a virtual iDrive controller, virtual CAN bus and GPS, and a coding editor. It is a research and learning tool: you bring your own
