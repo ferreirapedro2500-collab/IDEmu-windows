@@ -62,8 +62,11 @@ jobs:
         run: |
           $dist = "dist\IDEmu"
           New-Item -ItemType Directory -Force $dist | Out-Null
-          $skip = @('.git', '.github', 'dist', 'cache', 'environments', 'node_modules')
-          Get-ChildItem -Force | Where-Object { $skip -notcontains $_.Name } | Copy-Item -Destination $dist -Recurse -Force
+          # robocopy : le dépôt contient des liens symboliques (overlays QNX/Linux de tools\mgu) que Copy-Item ne sait pas copier ;
+          # /SL copie le lien lui-même, /XJ ignore les jonctions. Codes de sortie < 8 = succès.
+          robocopy . $dist /E /SL /XJ /NFL /NDL /NJH /NP /XD .git .github dist cache environments node_modules
+          if ($LASTEXITCODE -ge 8) { throw "robocopy a échoué ($LASTEXITCODE)" }
+          $global:LASTEXITCODE = 0
           # Python embutido: python\python.exe; o ._pth inclui a pasta do programa (..) para "python -m idemu" achar o pacote
           $zip = "python-$env:PYTHON_VERSION-embed-amd64.zip"
           Invoke-WebRequest "https://www.python.org/ftp/python/$env:PYTHON_VERSION/$zip" -OutFile $zip
